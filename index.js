@@ -1,116 +1,88 @@
 const http = require('http');
 const fs = require('fs');
-const path = require('path');
-const { parse } = require('querystring');
-const { authenticate } = require('./auth');
 
-const usersFile = path.join(__dirname, 'users.json');
-const memoriesFile = path.join(__dirname, 'memories.json');
+// Define the memory data file path
+const memoryFilePath = 'memories.json';
 
-// Initialize files if they don't exist
-if (!fs.existsSync(usersFile)) {
-  fs.writeFileSync(usersFile, JSON.stringify([]));
-}
-if (!fs.existsSync(memoriesFile)) {
-  fs.writeFileSync(memoriesFile, JSON.stringify([]));
-}
-
-const handleRequest = (req, res) => {
-  if (req.method === 'POST' && req.url === '/signup') {
-    handleSignup(req, res);
-  } else if (req.method === 'POST' && req.url === '/login') {
-    handleLogin(req, res);
-  } else {
-    authenticate(req, res, () => {
-      if (req.method === 'POST' && req.url === '/memories') {
-        handleCreateMemory(req, res);
-      } else if (req.method === 'GET' && req.url === '/memories') {
-        handleGetMemories(req, res);
-      } else {
-        res.statusCode = 404;
-        res.end('Not Found');
-      }
-    });
+// Function to read memories from the JSON file
+function getMemories() {
+  try {
+    const data = fs.readFileSync(memoryFilePath, 'utf8');
+    return JSON.parse(data) || []; // Return empty array if file is empty
+  } catch (err) {
+    console.error('Error reading memories:', err);
+    return []; // Return empty array on error
   }
-};
+}
 
-const handleSignup = (req, res) => {
-  let body = '';
-  req.on('data', chunk => {
-    body += chunk.toString();
-  });
-  req.on('end', () => {
-    const { username, email, password } = parse(body);
-    const usersFile = path.join(__dirname, 'users.json');
-    const users = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
+// Function to write memories to the JSON file
+function saveMemories(memories) {
+  try {
+    fs.writeFileSync(memoryFilePath, JSON.stringify(memories, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error saving memories:', err);
+  }
+}
 
-    const userExists = users.find(user => user.email === email);
-    if (userExists) {
-      res.statusCode = 400;
-      res.end('User already exists');
-      return;
+// Function to create a new memory
+function createMemory(content) {
+  return {
+    id: Math.random().toString(36).substring(2, 15), // Generate random ID
+    content,
+  };
+}
+
+// Function to handle authentication errors (helper function)
+function handleAuthError(res) {
+  res.writeHead(401, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ message: 'Authentication required' }));
+}
+
+// Function to handle requests and responses
+function handleRequest(req, res) {
+  // Authenticate using the middleware function from auth.js
+  if (!authenticate(req)) {
+    handleAuthError(res);
+    return;
+  }
+
+  const parsedUrl = url.parse(req.url, true); // Parse URL for query parameters
+  const pathname = parsedUrl.pathname;
+  const method = req.method;
+
+  // Handle memories (assuming content is in request body)
+  if (pathname === '/memories') {
+    if (method === 'GET') {
+      const memories = getMemories();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ memories }));
+    } else if (method === 'POST') {
+      let content;
+      try {
+        content = JSON.parse(req.body).content; // Assuming content is in JSON format
+      } catch (err) {
+        console.error('Error parsing memory content:', err);
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Invalid memory content format');
+        return;
+      }
+      const memories = getMemories();
+      memories.push(createMemory(content));
+      saveMemories(memories);
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ message: 'Memory created successfully!' }));
+    } else {
+      res.writeHead(405, { 'Content-Type': 'text/plain' });
+      res.end('Method not allowed');
     }
+  } else {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not Found');
+  }
+}
 
-    users.push({ username, email, password });
-    fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
-
-    res.statusCode = 201;
-    res.end('User created');
-  });
-};
-
-const handleLogin = (req, res) => {
-  let body = '';
-  req.on('data', chunk => {
-    body += chunk.toString();
-  });
-  req.on('end', () => {
-    const { email, password } = parse(body);
-    const users = JSON.parse(fs.readFileSync(usersFile, 'utf8'));
-
-    const user = users.find(user => user.email === email && user.password === password);
-    if (!user) {
-      res.statusCode = 400;
-      res.end('Invalid credentials');
-      return;
-    }
-
-    res.end(JSON.stringify({ message: 'Login successful' }));
-  });
-};
-
-const handleCreateMemory = (req, res) => {
-  let body = '';
-  req.on('data', chunk => {
-    body += chunk.toString();
-  });
-  req.on('end', () => {
-    const { content } = parse(body);
-
-    const memories = JSON.parse(fs.readFileSync(memoriesFile, 'utf8'));
-    const newMemory = { id: generateMemoryId(), content };
-    memories.push(newMemory);
-    fs.writeFileSync(memoriesFile, JSON.stringify(memories, null, 2));
-
-    res.statusCode = 201;
-    res.end(JSON.stringify(newMemory));
-  });
-};
-
-const handleGetMemories = (req, res) => {
-  const memories = JSON.parse(fs.readFileSync(memoriesFile, 'utf8'));
-  res.setHeader('Content-Type', 'application/json');
-  res.end(JSON.stringify(memories));
-};
-
-const generateMemoryId = () => {
-  const memories = JSON.parse(fs.readFileSync(memoriesFile, 'utf8'));
-  return memories.length + 1;
-};
-
+// HTTP server and listen on a port
 const server = http.createServer(handleRequest);
+const port = process.env.PORT || 3001;
+server.listen(port, () => console.log(`Server listening on port ${port}`));
 
-const PORT = 3001;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
